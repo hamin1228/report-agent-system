@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import AnyUrl, BaseModel, Field
 
 
 class WorkflowPhase(StrEnum):
@@ -30,10 +30,11 @@ class Outline(BaseModel):
 
 class Source(BaseModel):
     title: str
-    url: HttpUrl
+    url: AnyUrl
     snippet: str = ""
     content: str = ""
     relevance_score: float = Field(default=0.0, ge=0.0, le=1.0)
+    origin: str = "web"
     accessed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

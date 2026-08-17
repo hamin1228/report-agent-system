@@ -5,6 +5,7 @@ import json
 
 from pydantic import BaseModel, Field
 
+from report_agent.agents.graph_rag import GraphRAGAgent
 from report_agent.config import Settings
 from report_agent.evaluators import RESEARCH_RUBRIC, Evaluator
 from report_agent.llm import LLMClient
@@ -81,16 +82,51 @@ class SearchAgent:
 class ResearcherWorkflow:
     """Runs one SearchAgent per section with bounded concurrency."""
 
-    def __init__(self, settings: Settings, web: WebTools | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        web: WebTools | None = None,
+        graph_rag: GraphRAGAgent | None = None,
+    ) -> None:
         self.settings = settings
         self.web = web or WebTools(settings)
+        self.graph_rag = graph_rag
+        if self.graph_rag is None and settings.rag_configured:
+            self.graph_rag = GraphRAGAgent(settings)
+
+    async def close(self) -> None:
+        if self.graph_rag is not None:
+            await self.graph_rag.close()
 
     async def run(self, outline: Outline) -> dict[str, SectionResearch]:
         semaphore = asyncio.Semaphore(self.settings.max_parallel_searches)
 
         async def research(section: OutlineSection) -> SectionResearch:
             async with semaphore:
-                return await SearchAgent(self.settings, self.web).run(section)
+                agents = [SearchAgent(self.settings, self.web).run(section)]
+                if self.graph_rag is not None:
+                    agents.append(self.graph_rag.run(section))
+                outcomes = await asyncio.gather(*agents, return_exceptions=True)
+                successful = [item for item in outcomes if isinstance(item, SectionResearch)]
+                if not successful:
+                    errors = "; ".join(str(item) for item in outcomes)
+                    raise RuntimeError(errors or f"Research failed: {section.title}")
+                findings = list(
+                    dict.fromkeys(finding for item in successful for finding in item.findings)
+                )
+                sources: dict[str, Source] = {}
+                for item in successful:
+                    for source in item.sources:
+                        sources.setdefault(str(source.url), source)
+                return SectionResearch(
+                    section_title=section.title,
+                    findings=findings,
+                    sources=list(sources.values()),
+                    complete=True,
+                    error="; ".join(
+                        str(item) for item in outcomes if isinstance(item, BaseException)
+                    ),
+                )
 
         raw_results = await asyncio.gather(
             *(research(section) for section in outline.sections), return_exceptions=True

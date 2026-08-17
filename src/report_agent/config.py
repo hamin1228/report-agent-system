@@ -1,6 +1,7 @@
 """Environment-backed application settings."""
 
 from pathlib import Path
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import Field
@@ -39,3 +40,27 @@ class Settings(BaseSettings):
     max_fetch_bytes: int = Field(default=1_000_000, ge=10_000, le=5_000_000)
     max_fetch_redirects: int = Field(default=3, ge=0, le=10)
     workspace: Path = Path("workspace")
+
+    # Optional Neo4j GraphRAG. Existing web-only installations keep this disabled.
+    rag_enabled: bool = False
+    neo4j_uri: str = ""
+    neo4j_username: str = "neo4j"
+    neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
+    rag_embedding_model: str = "openai/text-embedding-3-small"
+    rag_vector_index: str = "report_chunk_embeddings"
+    rag_top_k: int = Field(default=5, ge=1, le=20)
+    rag_chunk_size: int = Field(default=1200, ge=200, le=8000)
+    rag_chunk_overlap: int = Field(default=200, ge=0, le=2000)
+    rag_retrieval_mode: Literal["vector", "hybrid"] = "hybrid"
+
+    @property
+    def rag_configured(self) -> bool:
+        """Return whether GraphRAG is enabled and has usable connection settings."""
+
+        return bool(
+            self.rag_enabled
+            and self.neo4j_uri.strip()
+            and self.neo4j_username.strip()
+            and self.neo4j_password
+        )

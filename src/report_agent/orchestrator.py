@@ -85,6 +85,8 @@ class ReportOrchestrator:
                 self.store.save_state(self.state)
             self._notify(progress_handler, f"Workflow failed: {exc}")
             raise
+        finally:
+            await self.researcher.close()
 
     def _notify(self, handler: ProgressHandler | None, message: str) -> None:
         if handler and self.state:

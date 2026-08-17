@@ -1,6 +1,6 @@
 # Report Agent System
 
-강의의 리포트 생성 멀티 에이전트 구조를 실무형 Python 패키지로 통합한 프로젝트입니다.
+웹 리서치와 Neo4j GraphRAG를 결합한 실무형 멀티 에이전트 보고서 생성 시스템입니다.
 
 ## 구현 상태
 
@@ -19,6 +19,10 @@
 - [x] SSRF·리디렉션·응답 크기·콘텐츠 타입 방어
 - [x] 프롬프트 인젝션 데이터 경계
 - [x] GitHub Actions·Dependabot·이슈/PR 템플릿
+- [x] 선택형 Neo4j Vector + Graph RAG 전문 에이전트
+- [x] 웹 검색과 내부 GraphRAG 검색의 병렬 병합
+- [x] TXT·Markdown·PDF 문서 적재 CLI
+- [x] Neo4j Aura 연결·Vector Index·문서 적재·검색 E2E 검증
 
 ## 목표 아키텍처
 
@@ -28,7 +32,8 @@ User
        ├─ OutlinerAgent
        │    └─ OutlineEvaluator
        ├─ ResearcherWorkflow
-       │    └─ SearchAgent × N (parallel)
+       │    ├─ SearchAgent × N (parallel)
+       │    └─ GraphRAGAgent × N (optional, parallel)
        └─ WriterAgent
             ├─ SectionEvaluator
             └─ ReportEvaluator
@@ -40,8 +45,9 @@ User
 2. Evaluator가 아웃라인을 검사하고 필요한 경우 제한 횟수만 재생성합니다.
 3. CLI에서 사용자가 아웃라인을 승인하거나 한 번 수정할 수 있습니다.
 4. `ResearcherWorkflow`가 섹션마다 `SearchAgent`를 제한된 동시성으로 실행합니다.
-5. `WriterAgent`가 섹션을 병렬 작성하고 품질을 검사합니다.
-6. `ReportOrchestrator`가 결과를 Markdown과 JSON으로 저장합니다.
+5. GraphRAG가 활성화되면 `GraphRAGAgent`가 Neo4j 내부 지식을 함께 검색하고 결과를 병합합니다.
+6. `WriterAgent`가 섹션을 병렬 작성하고 품질을 검사합니다.
+7. `ReportOrchestrator`가 결과를 Markdown과 JSON으로 저장합니다.
 
 CLI는 각 단계에서 `OUTLINE`, `APPROVAL`, `RESEARCH`, `WRITING`, `COMPLETE` 상태를
 출력합니다. 외부 API가 일시적으로 실패하면 제한된 지수 백오프로 재시도하며,
@@ -102,6 +108,44 @@ report.md
 state.json
 ```
 
+## Neo4j GraphRAG 사용
+
+GraphRAG는 선택 기능입니다. 사용하지 않으면 기존 Tavily 웹 검색만 실행됩니다. 설치:
+
+```bash
+uv sync --locked --extra dev --extra rag
+```
+
+`.env`에 Neo4j 연결 정보를 추가합니다. 실제 비밀번호는 Git에 커밋하지 마세요.
+
+```dotenv
+REPORT_AGENT_RAG_ENABLED=true
+REPORT_AGENT_NEO4J_URI=neo4j+s://YOUR_INSTANCE.databases.neo4j.io
+REPORT_AGENT_NEO4J_USERNAME=neo4j
+REPORT_AGENT_NEO4J_PASSWORD=...
+REPORT_AGENT_NEO4J_DATABASE=neo4j
+REPORT_AGENT_RAG_EMBEDDING_MODEL=openai/text-embedding-3-small
+REPORT_AGENT_RAG_RETRIEVAL_MODE=hybrid
+```
+
+TXT, Markdown 또는 PDF를 임베딩하고 Neo4j에 적재합니다.
+
+```bash
+uv run report-agent rag-ingest ./documents/handbook.pdf
+```
+
+이후 일반 보고서 명령을 실행하면 각 섹션에서 웹 검색과 GraphRAG 검색을 병렬 수행합니다.
+`vector` 모드는 일치 청크만 반환하고, 기본 `hybrid` 모드는 앞뒤 청크와 연결된
+`RAGEntity` 노드까지 문맥에 포함합니다. 외부에서 엔티티 관계를 추가할 때는
+`(RAGChunk)-[:MENTIONS]->(RAGEntity)` 형태를 사용합니다.
+
+벡터 검색은 최신 Neo4j에서 Cypher 25 `SEARCH` 구문을 우선 사용합니다. `SEARCH`를
+지원하지 않는 Neo4j 5.x 서버에서는 `db.index.vector.queryNodes` 프로시저로 자동
+대체하여 강의 환경과 최신 Aura 환경을 모두 지원합니다.
+
+보안을 위해 에이전트가 생성한 임의 Cypher는 실행하지 않습니다. 검색은 읽기 전용 정적
+Cypher로 제한하며, 운영 Neo4j 계정에도 최소 권한을 적용하는 것을 권장합니다.
+
 ## 테스트와 품질 검사
 
 ```bash
@@ -123,11 +167,13 @@ pre-commit run --all-files
 
 - Ruff lint: 통과
 - Ruff format: 통과
-- mypy strict: 15개 소스 파일 통과
-- pytest: 14개 테스트 통과
+- mypy strict: 19개 소스 파일 통과
+- pytest: 18개 테스트 통과
 - 패키지 wheel·source distribution 빌드: 통과
+- Neo4j Aura Vector Index 및 웹 + GraphRAG 보고서 생성 수동 E2E: 통과
 
-실제 LLM·Tavily 호출을 사용하는 E2E 검증은 API 비용이 발생하므로 자동 테스트에서 제외합니다.
+실제 LLM·Tavily·Neo4j 호출을 사용하는 E2E 검증은 API 비용이 발생하므로 자동 CI에서는
+제외하며, 배포 전 수동 검증 항목으로 관리합니다.
 
 ## 프로젝트 구조
 
@@ -135,8 +181,11 @@ pre-commit run --all-files
 src/report_agent/
 ├── agents/
 │   ├── outliner.py       # 아웃라인 생성
+│   ├── graph_rag.py      # Neo4j GraphRAG 전문 에이전트
 │   ├── researcher.py     # 병렬 검색 워크플로우
 │   └── writer.py         # 섹션 및 최종 보고서 작성
+├── rag/
+│   └── neo4j_store.py    # 문서 적재, Vector Index, 그래프 확장 검색
 ├── tools/web.py          # Tavily 검색과 HTTP fetch
 ├── config.py             # 환경변수 설정
 ├── context.py            # 파일 기반 컨텍스트 조회
@@ -190,6 +239,8 @@ uv sync --locked
 - 웹 검색은 현재 Tavily API를 사용합니다.
 - 웹페이지 전문 파싱은 기본 HTTP fetch만 제공하며 사이트별 본문 정제는 향후 과제입니다.
 - 외부 정보의 정확성과 라이선스는 보고서 배포 전에 사람이 최종 검토해야 합니다.
+- GraphRAG는 Neo4j 5.x Vector Index와 임베딩 API가 필요합니다.
+- 기본 적재기는 문서 청크와 순서 관계를 생성하며, 도메인 엔티티 관계는 별도 추출·적재가 필요합니다.
 
 ## 보안
 

@@ -3,7 +3,7 @@
 import json
 from typing import Any, TypeVar
 
-from litellm import acompletion
+from litellm import acompletion, aembedding
 from pydantic import BaseModel
 
 from report_agent.config import Settings
@@ -46,3 +46,24 @@ class LLMClient:
         raw = await self.complete(system=system, user=prompt)
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
         return schema.model_validate_json(cleaned.strip())
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        """Create embeddings through LiteLLM using the configured RAG model alias."""
+
+        if not texts:
+            return []
+
+        async def call_model() -> Any:
+            return await aembedding(
+                model=self.settings.rag_embedding_model,
+                input=texts,
+                timeout=self.settings.request_timeout_seconds,
+            )
+
+        response = await with_retry(
+            call_model,
+            attempts=self.settings.max_api_retries,
+            base_delay_seconds=self.settings.retry_base_delay_seconds,
+        )
+        ordered = sorted(response.data, key=lambda item: item["index"])
+        return [list(item["embedding"]) for item in ordered]

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from report_agent.config import load_environment
+from report_agent.config import Settings, load_environment
 
 
 def test_load_environment_without_overriding_existing_values(
@@ -21,3 +21,19 @@ def test_load_environment_without_overriding_existing_values(
     assert load_environment(env_file)
     assert os.environ["OPENAI_API_KEY"] == "from-runtime"
     assert os.environ["TAVILY_API_KEY"] == "from-file"
+
+
+def test_rag_requires_enablement_and_credentials() -> None:
+    disabled = Settings(
+        rag_enabled=False,
+        neo4j_uri="neo4j://localhost:7687",
+        neo4j_password="secret",
+    )
+    configured = Settings(
+        rag_enabled=True,
+        neo4j_uri="neo4j://localhost:7687",
+        neo4j_password="secret",
+    )
+
+    assert not disabled.rag_configured
+    assert configured.rag_configured
